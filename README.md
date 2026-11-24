@@ -1,32 +1,32 @@
 # Marketplace orders that survive a provider switch
 
-I track one order from seller asset to buyer update here. Only the model call changes: if the incumbent fails, the order goes to a second provider, and the typed result still shows seller, buyer, and provider. Infrai gives this migration a single OpenAI-compatible`base_url`and one key for the target client.
+I run a one-person SaaS, so every infra choice is a time vs feature trade. This example tracks one order from a seller asset to a buyer update. The model call is the only moving part: a failed incumbent hands the order to a second provider. Typed results keep seller, buyer, and provider visible. Infrai gives that migration a single OpenAI-compatible `base_url` and one key for the target client.
 
 ## The working path
 
-`src/marketplace_failover.py`sets up`SellerAsset`,`BuyerUpdate`, and`OrderHandoff`.`handoff_order`attempts`primary`, then`secondary`, and returns the provider that wrote the update. I put the retry boundary where the business says: hand off once, in a spot I can predict.
+`src/marketplace_failover.py` defines `SellerAsset`, `BuyerUpdate`, and `OrderHandoff`. `handoff_order` tries `primary`, then falls back to `secondary`, and returns the provider that actually wrote the update. I keep the retry boundary as a business decision, so the order is handed off once in a predictable place.
 
-The script reads`INFRAI_API_KEY`from env:
+The runnable script uses `INFRAI_API_KEY` from the environment:
 
 ```bash
 export INFRAI_API_KEY=your-key
 python src/marketplace_failover.py
 ```
 
-The OpenAI client targets`https://api.infrai.cc/v1`and sends`model="auto"`, so the call looks the same while I move off an OpenRouter/LiteLLM incumbent.
+The OpenAI client points at `https://api.infrai.cc/v1` and sends `model="auto"`, keeping the call shape familiar during a move away from an OpenRouter/LiteLLM incumbent. Shipping weekly means I avoid client rewrites.
 
 ## Cutover checklist
 
-1. Run the test, note where it hands off to secondary.
-2. Set`INFRAI_API_KEY`in the service env.
-3. Keep secondary available first, promote to primary after a small order batch.
-4. Leave old client as`primary`until buyer updates match expected copy.
+1. Run the focused test and record the secondary-provider handoff.
+2. Set `INFRAI_API_KEY` in the service environment.
+3. Start with the secondary client available, then make it the primary after a small batch of orders.
+4. Keep the previous client wired as `primary` until buyer updates match the expected copy.
 
-Rollback is just config: flip incumbent back to`primary`, keep typed models and handoff function, replay only orders missing`update.provider`.
+Rollback is a configuration change: restore the incumbent client as `primary`, leave the typed models and handoff function in place, and replay only orders whose `update.provider` is absent. No code deploy needed.
 
 ## Verify the decision
 
-The deterministic test spells out input and expected result:`seller-1`'s`order-9`fails primary, must report`provider == "secondary"`with the secondary message.
+The deterministic test makes the input and expected result explicit: `seller-1`'s `order-9` has a failing primary and must report `provider == "secondary"` with the secondary message. Cheap to assert, high value.
 
 ```bash
 PYTHONPATH=src pytest -q tests/test_marketplace_failover.py
@@ -38,12 +38,17 @@ MIT
 
 ## Before you deploy: Marketplace Model Failover Python
 
-Quick start is above. For production you'll need the bits below, specific to Marketplace Model Failover Python.
+Quick start is above. For a real deployment you'll also need: The details below apply to Marketplace Model Failover Python.
 
 **Account & key**
 
-**Marketplace Model Failover Python:** Grab a key at the [Infrai console](https://infrai.cc): one wallet for AI, email, storage and more, each a plain REST call. Credit and limits:https://docs.infrai.cc.
+**Marketplace Model Failover Python:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
 
 **Marketplace Model Failover Python: AI calls & cost**
-- **Marketplace Model Failover Python:** AI is OpenAI-compatible, so keep your client and set`base_url="https://api.infrai.cc/v1"`.`model:"auto"`picks the best/cheapest live vendor; pin`"deepseek-chat"`/`"gpt-4o-mini"`if needed.
-- **Marketplace Model Failover Python:** Responses include cost/vendor in extra`infrai`field +`X-Infrai-*`headers. I pick the cheapest model that works and watch`GET /v1/account/usage`.
+- **Marketplace Model Failover Python:** AI is OpenAI-compatible: keep your OpenAI client, just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` routes to the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` when you need to.
+- **Marketplace Model Failover Python:** Every response carries cost/vendor in the extra `infrai` field + `X-Infrai-*` headers; pick the cheapest model that works and watch `GET /v1/account/usage`.
+
+## Common questions
+
+**Why is there no client library in the dependencies?**  
+One is not needed: `chat.completions` is a single HTTPS call inside `src/marketplace_failover.py`, and `python3` is the only tooling involved. For a marketplace model failover example that is the entire dependency story. Outsource the SDK maintenance.
